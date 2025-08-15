@@ -1,4 +1,4 @@
-# app.py — 311 AI Agent (Streamlit)
+# app.py — 311 AI Agent (Streamlit) with City+State sidebar selector
 import re, random, csv, io
 from datetime import datetime
 import streamlit as st
@@ -13,6 +13,18 @@ def normalize(txt: str) -> str:
 def contains_any(text, keywords):
     t = normalize(text)
     return any(k in t for k in keywords)
+
+# ---------- States list for sidebar ----------
+US_STATES = [
+    "Your State", "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois",
+    "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland",
+    "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana",
+    "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York",
+    "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania",
+    "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah",
+    "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"
+]
 
 # ---------- City profile ----------
 def make_city_profile(city="Your City", state="Your State"):
@@ -92,7 +104,6 @@ FIELD_QUESTIONS = {
 
 def detect_intent(text: str):
     t = normalize(text)
-    # demo phrase for adapting the city profile
     if "yes please adapt this to my city's open data and services categories" in t:
         return "adapt_city"
     for intent, keys in INTENT_PATTERNS:
@@ -228,23 +239,54 @@ def push_user_and_process(text: str):
             "I’m not sure I understood. Type `menu` to see options, "
             "or say 'Report a pothole' or 'Trash pickup day'."})
 
-# ---------- Layout ----------
+# ---------- Sidebar (with City+State selector) ----------
 with st.sidebar:
     st.markdown("## 311 AI Agent")
+
+    # Current profile
     meta = st.session_state.city_cfg["meta"]
     st.markdown(f"**City Profile:** {meta['city']}, {meta['state']}")
+
+    # Quick adapt UI
+    st.markdown("#### Adapt city & state")
+    city_default = meta.get("city", "Your City")
+    state_default = meta.get("state", "Your State")
+    city_input = st.text_input("City", value=city_default, placeholder="e.g., Austin")
+
+    try:
+        state_index = US_STATES.index(state_default) if state_default in US_STATES else 0
+    except Exception:
+        state_index = 0
+    state_input = st.selectbox("State", US_STATES, index=state_index)
+
+    if st.button("Apply profile"):
+        st.session_state.city_cfg = make_city_profile(city_input.strip() or "Your City",
+                                                      state_input.strip() or "Your State")
+        st.success(f"Adapted to {city_input or 'Your City'}, {state_input or 'Your State'}")
+
     st.caption(
-        "Type `menu` for options.\n\n"
-        "To adapt the city, say:\n"
-        "yes please adapt this to my city's Open data and services categories. "
-        "My city's name is <City> in the state <State>."
+        "Or use the chat phrase:\n\n"
+        "“yes please adapt this to my city's Open data and services categories. "
+        "My city's name is <City> in the state <State>.”"
     )
+
+    # Recent tickets
     if st.session_state.ticket_log:
         st.divider()
         st.markdown("**Recent Tickets**")
         for t in st.session_state.ticket_log[-5:][::-1]:
             st.write(f"• {t['ticket_id']} — {t['service']}")
 
+    # Optional: quick reset for demos
+    st.divider()
+    if st.button("🔄 Reset conversation"):
+        st.session_state.messages = []
+        st.session_state.active_intent = None
+        st.session_state.pending_fields = []
+        st.session_state.filled_fields = {}
+        st.experimental_rerun()
+
+# ---------- Main Layout ----------
 st.title("🧰 311 AI Agent — Streamlit App")
 tab_guide, tab_live = st.tabs(["🧭 Guide Mode", "💬 Live Agent"])
 
