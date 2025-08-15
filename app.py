@@ -1,5 +1,5 @@
-# app.py — 311 AI Agent (Streamlit) with City+State sidebar selector
-import re, random, csv, io
+# app.py — 311 AI Agent (Streamlit) with ALL-cities picker (Census API)
+import re, random, csv, io, requests
 from datetime import datetime
 import streamlit as st
 
@@ -14,17 +14,41 @@ def contains_any(text, keywords):
     t = normalize(text)
     return any(k in t for k in keywords)
 
-# ---------- States list for sidebar ----------
-US_STATES = [
-    "Your State", "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
-    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois",
-    "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland",
-    "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana",
-    "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York",
-    "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania",
-    "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah",
-    "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"
-]
+# ---------- State → FIPS (for Census API) ----------
+STATE_FIPS = {
+    "Alabama":"01","Alaska":"02","Arizona":"04","Arkansas":"05","California":"06","Colorado":"08",
+    "Connecticut":"09","Delaware":"10","District of Columbia":"11","Florida":"12","Georgia":"13",
+    "Hawaii":"15","Idaho":"16","Illinois":"17","Indiana":"18","Iowa":"19","Kansas":"20",
+    "Kentucky":"21","Louisiana":"22","Maine":"23","Maryland":"24","Massachusetts":"25",
+    "Michigan":"26","Minnesota":"27","Mississippi":"28","Missouri":"29","Montana":"30",
+    "Nebraska":"31","Nevada":"32","New Hampshire":"33","New Jersey":"34","New Mexico":"35",
+    "New York":"36","North Carolina":"37","North Dakota":"38","Ohio":"39","Oklahoma":"40",
+    "Oregon":"41","Pennsylvania":"42","Rhode Island":"44","South Carolina":"45","South Dakota":"46",
+    "Tennessee":"47","Texas":"48","Utah":"49","Vermont":"50","Virginia":"51","Washington":"53",
+    "West Virginia":"54","Wisconsin":"55","Wyoming":"56"
+}
+US_STATES = ["Your State"] + list(STATE_FIPS.keys())
+
+@st.cache_data(show_spinner=False, ttl=60*60)
+def fetch_cities_for_state(state_name: str):
+    """Return a sorted list of place names for the state using the Census API."""
+    fips = STATE_FIPS.get(state_name)
+    if not fips:
+        return []
+    # 2023 ACS 5-year SUBJECT table: just need names. This returns cities, towns, CDPs, etc.
+    url = f"https://api.census.gov/data/2023/acs/acs5/subject?get=NAME&for=place:*&in=state:{fips}"
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        rows = resp.json()
+        # First row is header; remainder are [NAME, state, place]
+        names = [r[0].replace(" town", "").replace(" city", "") for r in rows[1:]]
+        # Keep only "<Place>, <State>" or names containing 'CDP' etc. We'll strip trailing ", <state>" in display
+        dedup = sorted(set(names), key=lambda x: x.lower())
+        # Keep readable city list
+        return dedup
+    except Exception:
+        return []
 
 # ---------- City profile ----------
 def make_city_profile(city="Your City", state="Your State"):
@@ -80,7 +104,6 @@ INTENT_PATTERNS = [
     ("stray_animal", ["stray", "dog", "cat", "animal control", "lost pet"]),
     ("general_info", ["info", "information", "hours", "phone", "contact", "permit", "parks"]),
 ]
-
 REQUIRED_FIELDS = {
     "pothole": ["street_address", "description"],
     "trash_schedule": ["street_address"],
@@ -88,7 +111,6 @@ REQUIRED_FIELDS = {
     "streetlight": ["nearest_address"],
     "stray_animal": ["location", "animal_type"],
 }
-
 FIELD_QUESTIONS = {
     "street_address": "What is the street address?",
     "nearest_intersection": "What is the nearest intersection?",
@@ -115,7 +137,6 @@ def detect_intent(text: str):
 
 # ---------- App state ----------
 st.set_page_config(page_title="311 AI Agent — Streamlit", page_icon="🧰", layout="wide")
-
 if "city_cfg" not in st.session_state:
     st.session_state.city_cfg = make_city_profile()
 if "messages" not in st.session_state:
@@ -239,7 +260,7 @@ def push_user_and_process(text: str):
             "I’m not sure I understood. Type `menu` to see options, "
             "or say 'Report a pothole' or 'Trash pickup day'."})
 
-# ---------- Sidebar (with City+State selector) ----------
+# ---------- Sidebar (State → Cities from Census) ----------
 with st.sidebar:
     st.markdown("## 311 AI Agent")
 
@@ -247,22 +268,33 @@ with st.sidebar:
     meta = st.session_state.city_cfg["meta"]
     st.markdown(f"**City Profile:** {meta['city']}, {meta['state']}")
 
-    # Quick adapt UI
     st.markdown("#### Adapt city & state")
-    city_default = meta.get("city", "Your City")
-    state_default = meta.get("state", "Your State")
-    city_input = st.text_input("City", value=city_default, placeholder="e.g., Austin")
-
+    # Select a state
     try:
-        state_index = US_STATES.index(state_default) if state_default in US_STATES else 0
+        default_state_idx = US_STATES.index(meta.get("state","Your State")) if meta.get("state") in US_STATES else 0
     except Exception:
-        state_index = 0
-    state_input = st.selectbox("State", US_STATES, index=state_index)
+        default_state_idx = 0
+    selected_state = st.selectbox("State", US_STATES, index=default_state_idx)
+
+    # Fetch cities for that state
+    cities = fetch_cities_for_state(selected_state) if selected_state in STATE_FIPS else []
+    if cities:
+        # Normalize/clean city names a bit; show searchable dropdown
+        try:
+            default_city_idx = cities.index(meta.get("city")) if meta.get("city") in cities else 0
+        except Exception:
+            default_city_idx = 0
+        selected_city = st.selectbox("City (from Census)", cities, index=default_city_idx)
+        city_input = st.text_input("Or type a custom city", value=selected_city)
+    else:
+        st.caption("Couldn’t load cities (or ‘Your State’ selected). You can type a city below.")
+        city_input = st.text_input("City", value=meta.get("city","Your City"))
 
     if st.button("Apply profile"):
-        st.session_state.city_cfg = make_city_profile(city_input.strip() or "Your City",
-                                                      state_input.strip() or "Your State")
-        st.success(f"Adapted to {city_input or 'Your City'}, {state_input or 'Your State'}")
+        new_city = (city_input or "Your City").strip()
+        new_state = (selected_state or "Your State").strip()
+        st.session_state.city_cfg = make_city_profile(new_city, new_state)
+        st.success(f"Adapted to {new_city}, {new_state}")
 
     st.caption(
         "Or use the chat phrase:\n\n"
@@ -277,7 +309,7 @@ with st.sidebar:
         for t in st.session_state.ticket_log[-5:][::-1]:
             st.write(f"• {t['ticket_id']} — {t['service']}")
 
-    # Optional: quick reset for demos
+    # Reset
     st.divider()
     if st.button("🔄 Reset conversation"):
         st.session_state.messages = []
@@ -290,7 +322,7 @@ with st.sidebar:
 st.title("🧰 311 AI Agent — Streamlit App")
 tab_guide, tab_live = st.tabs(["🧭 Guide Mode", "💬 Live Agent"])
 
-# ---- Guide Mode (click-through demo) ----
+# ---- Guide Mode ----
 with tab_guide:
     st.markdown("Use these buttons to run a demo without typing.")
     c1, c2, c3, c4 = st.columns(4)
@@ -330,9 +362,8 @@ with tab_guide:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
 
-# ---- Live Agent (type messages) ----
+# ---- Live Agent ----
 with tab_live:
-    # history
     for m in st.session_state.messages:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
