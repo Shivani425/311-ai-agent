@@ -1,4 +1,4 @@
-# app.py — 311 AI Agent (Streamlit, Live-Agent only)
+# app.py — 311 AI Agent (Streamlit, Live-Agent only, fixed dispatcher)
 import re, random, csv, io
 from datetime import datetime
 import streamlit as st
@@ -157,21 +157,35 @@ def finalize_case():
         msg += f"- Estimated resolution target: **~{svc['sla_days']} business days**\n"
     return msg + "\nAnything else I can do? Type `menu`."
 
-# ---------- Dispatcher (commands take priority even mid-form) ----------
-def push_user_and_process(text:str):
-    st.session_state.messages.append({"role":"user","content":text})
+# ---------- Dispatcher (fixed: do NOT detect new intent mid-form) ----------
+def push_user_and_process(text: str):
+    st.session_state.messages.append({"role": "user", "content": text})
     tnorm = normalize(text)
-    intent_guess = detect_intent(text)
 
-    # Mid-form: if user typed a command, cancel and restart with that command
+    # global quick commands
+    if tnorm in {"reset", "restart", "start over"}:
+        st.session_state.active_intent = None
+        st.session_state.pending_fields = []
+        st.session_state.filled_fields = {}
+        st.session_state.messages.append({"role": "assistant",
+                                          "content": "✅ Reset. Type `menu` or try 'Report a pothole'."})
+        return
+
+    # -------- MID-FORM MODE --------
     if st.session_state.active_intent and st.session_state.pending_fields:
-        if intent_guess in st.session_state.city_cfg["services"] or intent_guess in {"menu","adapt_city"}:
+        # allow only explicit commands mid-form
+        if tnorm == "menu":
+            st.session_state.messages.append({"role": "assistant", "content": show_menu()})
+            return
+        if tnorm in {"cancel"}:
             st.session_state.active_intent = None
             st.session_state.pending_fields = []
             st.session_state.filled_fields = {}
-            return push_user_and_process(text)
+            st.session_state.messages.append({"role": "assistant",
+                                              "content": "Canceled. Type `menu` to start something else."})
+            return
 
-        # Treat as answer to current field
+        # otherwise treat input as the answer to the current field
         field = st.session_state.pending_fields[0]
         val = text.strip()
         if tnorm == "skip" and field.endswith("_optional"):
@@ -181,18 +195,20 @@ def push_user_and_process(text:str):
 
         nxt = next_slot_question()
         if nxt:
-            st.session_state.messages.append({"role":"assistant","content":nxt})
+            st.session_state.messages.append({"role": "assistant", "content": nxt})
         else:
             msg = finalize_case()
             st.session_state.active_intent = None
             st.session_state.pending_fields = []
             st.session_state.filled_fields = {}
-            st.session_state.messages.append({"role":"assistant","content":msg})
+            st.session_state.messages.append({"role": "assistant", "content": msg})
         return
 
-    # Not mid-form: handle commands/intents
+    # -------- NOT MID-FORM: detect intent normally --------
+    intent_guess = detect_intent(text)
+
     if intent_guess == "menu":
-        st.session_state.messages.append({"role":"assistant","content":show_menu()})
+        st.session_state.messages.append({"role": "assistant", "content": show_menu()})
         return
 
     if intent_guess == "adapt_city":
@@ -200,12 +216,13 @@ def push_user_and_process(text:str):
         city, state = "Your City", "Your State"
         if "name is" in t and "in the state" in t:
             try:
-                city = t.split("name is",1)[1].split("in the state",1)[0].strip(" .,:;").title()
-                state = t.split("in the state",1)[1].strip(" .,:;").title()
-            except:
+                city = t.split("name is", 1)[1].split("in the state", 1)[0].strip(" .,:;").title()
+                state = t.split("in the state", 1)[1].strip(" .,:;").title()
+            except Exception:
                 pass
         st.session_state.city_cfg = make_city_profile(city, state)
-        st.session_state.messages.append({"role":"assistant","content":f"👍 Adapted to **{city}, {state}**. Type `menu`."})
+        st.session_state.messages.append({"role": "assistant",
+                                          "content": f"👍 Adapted to **{city}, {state}**. Type `menu`."})
         return
 
     if intent_guess in st.session_state.city_cfg["services"]:
@@ -213,16 +230,22 @@ def push_user_and_process(text:str):
         st.session_state.filled_fields = {}
         nxt = next_slot_question()
         if nxt:
-            st.session_state.messages.append({"role":"assistant","content":
-                f"Okay, let's file a **{intent_guess.replace('_',' ')}** request.\n\n{nxt}"})
+            st.session_state.messages.append(
+                {"role": "assistant",
+                 "content": f"Okay, let's file a **{intent_guess.replace('_',' ')}** request.\n\n{nxt}"}
+            )
         else:
             svc = st.session_state.city_cfg["services"][intent_guess]
-            st.session_state.messages.append({"role":"assistant","content":
-                f"**{intent_guess.replace('_',' ').title()}** — {svc['description']}\n\nMore info: {svc.get('link','(no link)')}"})
+            st.session_state.messages.append(
+                {"role": "assistant",
+                 "content": f"**{intent_guess.replace('_',' ').title()}** — {svc['description']}\n\n"
+                            f"More info: {svc.get('link','(no link)')}"}
+            )
         return
 
-    st.session_state.messages.append({"role":"assistant","content":
-        "I’m not sure I understood. Type `menu`, or try 'Report a pothole' or 'Trash pickup day'."})
+    st.session_state.messages.append({"role": "assistant",
+                                      "content": "I’m not sure I understood. Type `menu`, or try "
+                                                 "'Report a pothole' or 'Trash pickup day'."})
 
 # ---------- Sidebar ----------
 with st.sidebar:
