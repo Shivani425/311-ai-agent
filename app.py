@@ -3,7 +3,7 @@ import re, random, csv, io
 from datetime import datetime
 import streamlit as st
 
-# ---------- page chrome ----------
+# ---------- Page chrome ----------
 st.set_page_config(page_title="311 AI Agent", page_icon="🧰", layout="wide")
 st.markdown("""
 <style>
@@ -18,13 +18,18 @@ st.markdown("""
 def bubble_left(t:str):  st.markdown(f'<div class="bubble left">{t}</div>', unsafe_allow_html=True)
 def bubble_right(t:str): st.markdown(f'<div class="bubble right">{t}</div>', unsafe_allow_html=True)
 
-# ---------- utils ----------
+# ---------- Utils ----------
 def make_ticket(prefix="CTY"):
     return f"{prefix}-{datetime.now().strftime('%y%m%d')}-{random.randint(1000,9999)}"
-def normalize(txt:str)->str: return re.sub(r"\s+", " ", txt.strip().lower())
-def contains_any(text, keys): return any(k in normalize(text) for k in keys)
 
-# ---------- simple state list ----------
+def normalize(txt:str)->str:
+    return re.sub(r"\s+", " ", txt.strip().lower())
+
+def contains_any(text, keys):
+    t = normalize(text)
+    return any(k in t for k in keys)
+
+# ---------- Simple state list ----------
 US_STATES = ["Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut","Delaware",
 "District of Columbia","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa","Kansas","Kentucky",
 "Louisiana","Maine","Maryland","Massachusetts","Michigan","Minnesota","Mississippi","Missouri","Montana",
@@ -32,7 +37,7 @@ US_STATES = ["Alabama","Alaska","Arizona","Arkansas","California","Colorado","Co
 "Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island","South Carolina","South Dakota","Tennessee","Texas",
 "Utah","Vermont","Virginia","Washington","West Virginia","Wisconsin","Wyoming"]
 
-# ---------- catalog ----------
+# ---------- Catalog ----------
 def make_city_profile(city="Morrisville", state="North Carolina"):
     return {
         "meta": {"city": city, "state": state},
@@ -102,28 +107,32 @@ FIELD_QUESTIONS = {
 
 def detect_intent(text:str):
     t = normalize(text)
-    if "yes please adapt this to my city's open data and services categories" in t: return "adapt_city"
+    if "yes please adapt this to my city's open data and services categories" in t:
+        return "adapt_city"
     for intent, keys in INTENT_PATTERNS:
-        if contains_any(t, keys): return intent
-    if t in ["help","menu","hi","hello","start"]: return "menu"
+        if contains_any(t, keys):
+            return intent
+    if t in ["help","menu","hi","hello","start"]:
+        return "menu"
     return "unknown"
 
-# ---------- session ----------
-if "city_cfg"   not in st.session_state: st.session_state.city_cfg = make_city_profile()
-if "messages"   not in st.session_state: st.session_state.messages = []
+# ---------- Session ----------
+if "city_cfg" not in st.session_state:      st.session_state.city_cfg = make_city_profile()
+if "messages" not in st.session_state:      st.session_state.messages = []
 if "active_intent" not in st.session_state: st.session_state.active_intent = None
-if "pending_fields" not in st.session_state: st.session_state.pending_fields = []
-if "filled_fields"  not in st.session_state: st.session_state.filled_fields = {}
-if "ticket_log"     not in st.session_state: st.session_state.ticket_log = []
+if "pending_fields" not in st.session_state:st.session_state.pending_fields = []
+if "filled_fields" not in st.session_state: st.session_state.filled_fields = {}
+if "ticket_log" not in st.session_state:    st.session_state.ticket_log = []
 
-# ---------- helpers ----------
+# ---------- Helpers ----------
 def show_menu():
     svcs = st.session_state.city_cfg["services"]
     bullets = "\n".join([f"- **{k}** — {v['description']}" for k,v in svcs.items()])
     return "I can help with:\n" + bullets + "\n\nTry: 'Report a pothole', 'Trash pickup day', 'Streetlight out', 'Stray dog', or 'General info'."
 
 def next_slot_question():
-    if not st.session_state.active_intent: return None
+    if not st.session_state.active_intent:
+        return None
     req = REQUIRED_FIELDS.get(st.session_state.active_intent, [])
     svc_fields = st.session_state.city_cfg["services"][st.session_state.active_intent]["fields"]
     ordered = [f for f in req if f not in st.session_state.filled_fields] + \
@@ -144,16 +153,17 @@ def finalize_case():
     msg = (f"✅ **Submitted** your *{intent.replace('_',' ')}* request.\n\n"
            f"- Ticket ID: **{ticket_id}**\n- City: **{meta['city']}, {meta['state']}**\n"
            f"- Intake fields: `{payload}`\n- Reference: {svc.get('link','(no link)')}\n")
-    if "sla_days" in svc: msg += f"- Estimated resolution target: **~{svc['sla_days']} business days**\n"
+    if "sla_days" in svc:
+        msg += f"- Estimated resolution target: **~{svc['sla_days']} business days**\n"
     return msg + "\nAnything else I can do? Type `menu`."
 
-# ---------- single dispatcher (commands take priority even mid-form) ----------
+# ---------- Dispatcher (commands take priority even mid-form) ----------
 def push_user_and_process(text:str):
     st.session_state.messages.append({"role":"user","content":text})
     tnorm = normalize(text)
     intent_guess = detect_intent(text)
 
-    # mid-form: if user typed a command, cancel and restart
+    # Mid-form: if user typed a command, cancel and restart with that command
     if st.session_state.active_intent and st.session_state.pending_fields:
         if intent_guess in st.session_state.city_cfg["services"] or intent_guess in {"menu","adapt_city"}:
             st.session_state.active_intent = None
@@ -161,7 +171,7 @@ def push_user_and_process(text:str):
             st.session_state.filled_fields = {}
             return push_user_and_process(text)
 
-        # treat as answer
+        # Treat as answer to current field
         field = st.session_state.pending_fields[0]
         val = text.strip()
         if tnorm == "skip" and field.endswith("_optional"):
@@ -174,14 +184,16 @@ def push_user_and_process(text:str):
             st.session_state.messages.append({"role":"assistant","content":nxt})
         else:
             msg = finalize_case()
-            st.session_state.active_intent = st.session_state.pending_fields = []
+            st.session_state.active_intent = None
+            st.session_state.pending_fields = []
             st.session_state.filled_fields = {}
             st.session_state.messages.append({"role":"assistant","content":msg})
         return
 
-    # not mid-form: handle commands
+    # Not mid-form: handle commands/intents
     if intent_guess == "menu":
-        st.session_state.messages.append({"role":"assistant","content":show_menu()}); return
+        st.session_state.messages.append({"role":"assistant","content":show_menu()})
+        return
 
     if intent_guess == "adapt_city":
         t = tnorm
@@ -190,7 +202,8 @@ def push_user_and_process(text:str):
             try:
                 city = t.split("name is",1)[1].split("in the state",1)[0].strip(" .,:;").title()
                 state = t.split("in the state",1)[1].strip(" .,:;").title()
-            except: pass
+            except:
+                pass
         st.session_state.city_cfg = make_city_profile(city, state)
         st.session_state.messages.append({"role":"assistant","content":f"👍 Adapted to **{city}, {state}**. Type `menu`."})
         return
@@ -200,7 +213,8 @@ def push_user_and_process(text:str):
         st.session_state.filled_fields = {}
         nxt = next_slot_question()
         if nxt:
-            st.session_state.messages.append({"role":"assistant","content":f"Okay, let's file a **{intent_guess.replace('_',' ')}** request.\n\n{nxt}"})
+            st.session_state.messages.append({"role":"assistant","content":
+                f"Okay, let's file a **{intent_guess.replace('_',' ')}** request.\n\n{nxt}"})
         else:
             svc = st.session_state.city_cfg["services"][intent_guess]
             st.session_state.messages.append({"role":"assistant","content":
@@ -210,7 +224,7 @@ def push_user_and_process(text:str):
     st.session_state.messages.append({"role":"assistant","content":
         "I’m not sure I understood. Type `menu`, or try 'Report a pothole' or 'Trash pickup day'."})
 
-# ---------- sidebar ----------
+# ---------- Sidebar ----------
 with st.sidebar:
     st.markdown("## 311 AI Agent")
     meta = st.session_state.city_cfg["meta"]
@@ -227,33 +241,38 @@ with st.sidebar:
             st.write(f"• {t['ticket_id']} — {t['service']}")
     st.divider()
     if st.button("🔄 Reset conversation"):
-        st.session_state.messages = []; st.session_state.active_intent = None
-        st.session_state.pending_fields = []; st.session_state.filled_fields = {}
+        st.session_state.messages = []
+        st.session_state.active_intent = None
+        st.session_state.pending_fields = []
+        st.session_state.filled_fields = {}
         st.experimental_rerun()
 
-# ---------- main ----------
+# ---------- MAIN (Input-first, then render transcript) ----------
 st.title("🧰 311 AI Agent — Streamlit App")
 bubble_left("To protect your personal data, please don’t share sensitive info (like full card details or SSN).")
 bubble_left("Hello! I’m your 311 virtual assistant. Type `menu` to see services or ask directly.")
 
-# transcript with bubbles
+# Ensure one initial assistant message
+if not any(m["role"] == "assistant" for m in st.session_state.messages):
+    first = "Hi! I’m your 311 assistant. Type `menu` for potholes, trash pickup, streetlight, and more."
+    st.session_state.messages.append({"role":"assistant","content":first})
+
+# 1) Take input first, process it
+user_input = st.chat_input("Type here…")
+if user_input:
+    bubble_right(user_input)
+    push_user_and_process(user_input)
+
+# 2) Render the (now updated) transcript
 for m in st.session_state.messages:
     (bubble_right if m["role"]=="user" else bubble_left)(m["content"])
 
-if not any(m["role"]=="assistant" for m in st.session_state.messages):
-    first = "Hi! I’m your 311 assistant. Type `menu` for potholes, trash pickup, streetlight, and more."
-    st.session_state.messages.append({"role":"assistant","content":first}); bubble_left(first)
-
-user_in = st.chat_input("Type here…")
-if user_in:
-    bubble_right(user_in)
-    push_user_and_process(user_in)
-
-# export
+# ---------- Export tickets ----------
 st.divider()
 if st.session_state.ticket_log:
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=["ticket_id","service","city","state","payload","created_at"])
     writer.writeheader()
-    for r in st.session_state.ticket_log: writer.writerow(r)
+    for r in st.session_state.ticket_log:
+        writer.writerow(r)
     st.download_button("⬇️ Download tickets.csv", out.getvalue(), file_name="tickets.csv", mime="text/csv")
