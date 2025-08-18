@@ -1,6 +1,7 @@
-# app.py — North Carolina 311 Agent with real-time address geocoding (US Census)
-import re, random, csv, io, requests
+# app.py — NC 311 Agent (geocoding + ZIP validation + SQLite + Admin view)
+import re, random, csv, io, json, os, sqlite3, requests
 from datetime import datetime
+import pandas as pd
 import streamlit as st
 
 # ---------- Page chrome ----------
@@ -29,6 +30,36 @@ def normalize(txt:str)->str:
 def contains_any(text, keys):
     t = normalize(text)
     return any(k in t for k in keys)
+
+ZIP_RE = re.compile(r"^\d{5}$")
+
+# ---------- SQLite persistence ----------
+DB_PATH = os.path.join(os.getcwd(), "tickets.db")
+
+def db_init():
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS tickets(
+            ticket_id TEXT PRIMARY KEY,
+            service   TEXT,
+            city      TEXT,
+            state     TEXT,
+            payload   TEXT,
+            created_at TEXT
+        )
+    """)
+    con.commit(); con.close()
+
+def db_save(row: dict):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("INSERT OR REPLACE INTO tickets VALUES (?,?,?,?,?,?)",
+                (row["ticket_id"], row["service"], row["city"], row["state"],
+                 json.dumps(row["payload"]), row["created_at"]))
+    con.commit(); con.close()
+
+db_init()
 
 # ---------- NC jurisdiction config ----------
 NC_JURIS_CONFIG = {
@@ -67,7 +98,7 @@ NC_JURIS_CONFIG = {
         },
     },
 
-    # Examples (replace with official links as you confirm them)
+    # Placeholders for other NC cities; replace with official links when ready.
     "Raleigh": {
         "pothole": {"description":"Report a pothole or street maintenance issue",
                     "fields":["street_address","description","photo_url_optional"],
@@ -83,7 +114,6 @@ NC_JURIS_CONFIG = {
                        "link":"https://raleighnc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://raleighnc.gov/"},
     },
-
     "Durham": {
         "pothole": {"description":"Report pothole or roadway issue",
                     "fields":["street_address","description","photo_url_optional"],
@@ -118,36 +148,25 @@ def make_city_profile(city="Morrisville", state="North Carolina"):
 
 # ---------- Geocoding (US Census, no key) ----------
 CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
-
 def geocode_address(raw: str, city_hint: str | None, state_hint: str = "North Carolina"):
-    """
-    Returns dict with matched address, city, state, zip, lon(x), lat(y) or None if not found.
-    """
     oneline = raw if not city_hint else f"{raw}, {city_hint}, {state_hint}"
     try:
-        r = requests.get(
-            CENSUS_URL,
-            params={"address": oneline, "benchmark": "Public_AR_Current", "format": "json"},
-            timeout=10,
-        )
+        r = requests.get(CENSUS_URL, params={
+            "address": oneline, "benchmark": "Public_AR_Current", "format": "json"
+        }, timeout=10)
         r.raise_for_status()
         data = r.json()
         matches = data.get("result", {}).get("addressMatches", [])
-        if not matches:
-            # Try again without hint if we used it
-            if city_hint:
-                r2 = requests.get(
-                    CENSUS_URL,
-                    params={"address": raw, "benchmark": "Public_AR_Current", "format": "json"},
-                    timeout=10,
-                )
-                r2.raise_for_status()
-                data = r2.json()
-                matches = data.get("result", {}).get("addressMatches", [])
-                if not matches:
-                    return None
-            else:
-                return None
+        if not matches and city_hint:
+            r2 = requests.get(CENSUS_URL, params={
+                "address": raw, "benchmark": "Public_AR_Current", "format": "json"
+            }, timeout=10)
+            r2.raise_for_status()
+            data = r2.json()
+            matches = data.get("result", {}).get("addressMatches", [])
+            if not matches: return None
+        elif not matches:
+            return None
 
         m = matches[0]
         comps = m.get("addressComponents", {})
@@ -163,7 +182,7 @@ def geocode_address(raw: str, city_hint: str | None, state_hint: str = "North Ca
     except Exception:
         return None
 
-# ---------- Simple rules NLU ----------
+# ---------- NLU + slots ----------
 INTENT_PATTERNS = [
     ("pothole", ["pothole", "road hole", "asphalt", "road damage", "street crack"]),
     ("trash_schedule", ["trash", "garbage", "recycle", "pickup", "collection", "bin"]),
@@ -213,11 +232,9 @@ if "ticket_log" not in st.session_state:    st.session_state.ticket_log = []
 def show_menu():
     svcs = st.session_state.city_cfg["services"]
     bullets = "\n".join([f"- **{k}** — {v['description']}" for k,v in svcs.items()])
-    tips = (
-        "\n\n*Tip:* If the road is a **state highway** (I-40, US-64, NC-55, etc.), "
-        "potholes/streetlights are often handled by **NCDOT**. We can still log your request and "
-        "include the right link."
-    )
+    tips = ("\n\n*Tip:* If the road is a **state highway** (I-40, US-64, NC-55, etc.), "
+            "potholes/streetlights are often handled by **NCDOT**. We can still log your request and "
+            "include the right link.")
     return "I can help with:\n" + bullets + tips + "\n\nTry: 'Report a pothole', 'Trash pickup day', 'Streetlight out', 'Stray dog', or 'General info'."
 
 def next_slot_question():
@@ -237,6 +254,23 @@ def maybe_ncdot_note(address:str)->str|None:
                 "include the NCDOT contact link in the ticket.")
     return None
 
+def lookup_trash_day(address:str, zip_code:str|None)->str|None:
+    """
+    Demo rule-based estimator you can replace with a real API later.
+    """
+    a = normalize(address)
+    rules = {
+        "davis dr": "Wednesday",
+        "davis drive": "Wednesday",
+        "morrisville parkway": "Thursday",
+        "chapel hill rd": "Thursday",
+        "nc 55": "Monday",
+        "nc-55": "Monday",
+    }
+    for k, v in rules.items():
+        if k in a: return v
+    return None
+
 def finalize_case():
     intent = st.session_state.active_intent
     meta = st.session_state.city_cfg["meta"]
@@ -249,18 +283,29 @@ def finalize_case():
         note = maybe_ncdot_note(addr)
         if note: payload["note"] = note
 
-    st.session_state.ticket_log.append({
+    # Optional: estimate trash day for demo
+    if intent == "trash_schedule":
+        est = lookup_trash_day(payload.get("street_address",""), payload.get("zip_optional"))
+        if est: payload["estimated_pickup_day"] = est
+
+    # Save session + DB
+    row = {
         "ticket_id": ticket_id, "service": intent, "city": meta["city"], "state": meta["state"],
         "payload": payload, "created_at": datetime.now().isoformat(timespec="seconds"),
-    })
+    }
+    st.session_state.ticket_log.append(row)
+    db_save(row)
+
     msg = (f"✅ **Submitted** your *{intent.replace('_',' ')}* request.\n\n"
            f"- Ticket ID: **{ticket_id}**\n- City: **{meta['city']}, {meta['state']}**\n"
            f"- Intake fields: `{payload}`\n- Reference: {svc.get('link','(no link)')}\n")
     if "sla_days" in svc:
         msg += f"- Estimated resolution target: **~{svc['sla_days']} business days**\n"
+    if intent == "trash_schedule" and payload.get("estimated_pickup_day"):
+        msg += f"- **Estimated pickup day:** {payload['estimated_pickup_day']}\n"
     return msg + "\nAnything else I can do? Type `menu`."
 
-# ---------- Dispatcher (no re-intent mid-form + address geocoding) ----------
+# ---------- Dispatcher (no re-intent mid-form + geocoding + ZIP validation) ----------
 def push_user_and_process(text: str):
     st.session_state.messages.append({"role": "user", "content": text})
     tnorm = normalize(text)
@@ -287,29 +332,34 @@ def push_user_and_process(text: str):
 
         field = st.session_state.pending_fields[0]
         val = text.strip()
+
+        # ZIP validation nudge
+        if field == "zip_optional" and val and not ZIP_RE.match(val):
+            st.session_state.messages.append({"role":"assistant",
+                "content":"Please enter a 5-digit ZIP (e.g., 27560) or say `skip`."})
+            return
+
         if tnorm == "skip" and field.endswith("_optional"):
             st.session_state.filled_fields[field] = None
         else:
             st.session_state.filled_fields[field] = val
 
-        # 🔎 Real-time geocoding when an address field is provided
+        # Real-time geocoding when an address field is provided
         if field in {"street_address", "nearest_address"} and val:
             meta = st.session_state.city_cfg["meta"]
             geo = geocode_address(val, meta.get("city"), meta.get("state", "North Carolina"))
             if geo:
-                # Save standardized address + coordinates
                 st.session_state.filled_fields["address_verified"] = {
                     "matched": geo["matched"], "city": geo["city"], "state": geo["state"],
                     "zip": geo["zip"], "lat": geo["lat"], "lon": geo["lon"]
                 }
-                # Tell the user what we matched
                 lat = f"{geo['lat']:.5f}" if isinstance(geo.get("lat"), (int,float)) else geo.get("lat")
                 lon = f"{geo['lon']:.5f}" if isinstance(geo.get("lon"), (int,float)) else geo.get("lon")
                 st.session_state.messages.append({"role":"assistant",
                     "content": f"📍 I standardized the address to **{geo['matched']}** "
                                f"(lat {lat}, lon {lon})."})
 
-                # Auto-switch city if we recognize a different NC city
+                # Auto-switch city if recognized and different
                 detected_city = (geo.get("city") or "").title()
                 detected_state = geo.get("state")
                 if detected_state in {"NC","North Carolina"} and detected_city and \
@@ -339,14 +389,14 @@ def push_user_and_process(text: str):
         st.session_state.messages.append({"role":"assistant","content": show_menu()})
         return
     if intent == "adapt_city":
-        # “name is <City> in the state <State>”
         city, state = "Your City", "North Carolina"
         t = tnorm
         if "name is" in t and "in the state" in t:
             try:
                 city = t.split("name is",1)[1].split("in the state",1)[0].strip(" .,:;").title()
                 state = t.split("in the state",1)[1].strip(" .,:;").title()
-            except Exception: pass
+            except Exception:
+                pass
         st.session_state.city_cfg = make_city_profile(city, state)
         st.session_state.messages.append({"role":"assistant",
                                           "content": f"👍 Adapted to **{city}, {state}**. Type `menu`."})
@@ -362,7 +412,8 @@ def push_user_and_process(text: str):
         else:
             svc = st.session_state.city_cfg["services"][intent]
             st.session_state.messages.append({"role":"assistant",
-                "content": f"**{intent.replace('_',' ').title()}** — {svc['description']}\n\nMore info: {svc.get('link','(no link)')}"})
+                "content": f"**{intent.replace('_',' ').title()}** — {svc['description']}\n\n"
+                           f"More info: {svc.get('link','(no link)')}"})
         return
 
     st.session_state.messages.append({"role":"assistant",
@@ -387,6 +438,23 @@ with st.sidebar:
         st.divider(); st.markdown("**Recent Tickets**")
         for t in st.session_state.ticket_log[-6:][::-1]:
             st.write(f"• {t['ticket_id']} — {t['service']} — {t['city']}")
+
+    # Admin view
+    st.divider()
+    show_admin = st.checkbox("Admin: show latest 20 tickets")
+    if show_admin:
+        try:
+            con = sqlite3.connect(DB_PATH)
+            df = pd.read_sql_query(
+                "SELECT ticket_id, service, city, state, payload, created_at "
+                "FROM tickets ORDER BY created_at DESC LIMIT 20", con)
+            con.close()
+            # Pretty print payload as a compact JSON preview
+            df["payload"] = df["payload"].apply(lambda s: json.dumps(json.loads(s), ensure_ascii=False)[:200] + "…"
+                                                if len(s) > 200 else s)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.warning(f"Admin view error: {e}")
 
     st.divider()
     if st.button("🔄 Reset conversation"):
@@ -420,6 +488,10 @@ if st.session_state.ticket_log:
     writer = csv.DictWriter(out, fieldnames=["ticket_id","service","city","state","payload","created_at"])
     writer.writeheader()
     for r in st.session_state.ticket_log:
-        writer.writerow(r)
+        # ensure payload is serialized in CSV
+        row = r.copy()
+        row["payload"] = json.dumps(row["payload"], ensure_ascii=False)
+        writer.writerow(row)
     st.download_button("⬇️ Download tickets.csv", out.getvalue(), "tickets.csv", "text/csv")
 
+       
