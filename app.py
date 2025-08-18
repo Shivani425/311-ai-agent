@@ -1,10 +1,10 @@
-# app.py — 311 AI Agent (Streamlit, Live-Agent only, fixed dispatcher)
+# app.py — 311 AI Agent for Morrisville, NC (Live-Agent only, fixed mid-form bug)
 import re, random, csv, io
 from datetime import datetime
 import streamlit as st
 
 # ---------- Page chrome ----------
-st.set_page_config(page_title="311 AI Agent", page_icon="🧰", layout="wide")
+st.set_page_config(page_title="311 AI Agent — Morrisville, NC", page_icon="🧰", layout="wide")
 st.markdown("""
 <style>
 .main .block-container{max-width:860px;}
@@ -19,7 +19,7 @@ def bubble_left(t:str):  st.markdown(f'<div class="bubble left">{t}</div>', unsa
 def bubble_right(t:str): st.markdown(f'<div class="bubble right">{t}</div>', unsafe_allow_html=True)
 
 # ---------- Utils ----------
-def make_ticket(prefix="CTY"):
+def make_ticket(prefix="MO"):  # MO = Morrisville
     return f"{prefix}-{datetime.now().strftime('%y%m%d')}-{random.randint(1000,9999)}"
 
 def normalize(txt:str)->str:
@@ -29,7 +29,7 @@ def contains_any(text, keys):
     t = normalize(text)
     return any(k in t for k in keys)
 
-# ---------- Simple state list ----------
+# ---------- State list (kept so you can switch later if needed) ----------
 US_STATES = ["Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut","Delaware",
 "District of Columbia","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa","Kansas","Kentucky",
 "Louisiana","Maine","Maryland","Massachusetts","Michigan","Minnesota","Mississippi","Missouri","Montana",
@@ -37,46 +37,53 @@ US_STATES = ["Alabama","Alaska","Arizona","Arkansas","California","Colorado","Co
 "Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island","South Carolina","South Dakota","Tennessee","Texas",
 "Utah","Vermont","Virginia","Washington","West Virginia","Wisconsin","Wyoming"]
 
-# ---------- Catalog ----------
+# ---------- Catalog (Morrisville links) ----------
 def make_city_profile(city="Morrisville", state="North Carolina"):
+    """
+    Service links point to Morrisville, NC official resources:
+      - Report a Concern (town-owned roadways): potholes, streetlight issues, general public works
+      - Open Data Portal: datasets & APIs (used here as a reference link)
+    """
     return {
         "meta": {"city": city, "state": state},
         "services": {
             "pothole": {
-                "description": "Report a pothole or road surface issue",
-                "fields": ["street_address", "nearest_intersection", "description", "photo_url_optional"],
-                "link": "https://example.org/forms/pothole",
+                "description": "Report a pothole or road issue on Town-owned roads",
+                "fields": ["street_address", "description", "photo_url_optional"],
+                "link": "https://www.morrisvillenc.gov/services/report-a-problem-with/town-owned-roadways",
                 "sla_days": 5,
             },
             "trash_schedule": {
-                "description": "Find trash & recycling pickup day",
+                "description": "Find trash & recycling pickup day (reference: Open Data)",
                 "fields": ["street_address", "zip_optional"],
-                "link": "https://example.org/trash-schedule",
+                # Real portal link (kept as ref for demo; live API hookup can be added later)
+                "link": "https://opendata.townofmorrisville.org/explore/dataset/town-resources/api/",
             },
             "noise_complaint": {
-                "description": "Report excessive noise",
-                "fields": ["incident_time", "location", "description"],
-                "link": "https://example.org/forms/noise",
+                "description": "Report excessive noise (route via Town portal)",
+                "fields": ["location", "description"],
+                "link": "https://www.morrisvillenc.gov/services/report-a-problem-with/town-owned-roadways",
             },
             "streetlight": {
-                "description": "Report a streetlight outage",
+                "description": "Report a streetlight outage (Town portal)",
                 "fields": ["nearest_address", "pole_number_optional", "description"],
-                "link": "https://example.org/forms/streetlight",
+                "link": "https://www.morrisvillenc.gov/services/report-a-problem-with/town-owned-roadways",
                 "sla_days": 7,
             },
             "stray_animal": {
                 "description": "Report a stray or lost animal",
                 "fields": ["location", "animal_type", "description"],
-                "link": "https://example.org/forms/animal",
+                "link": "https://www.morrisvillenc.gov/services/report-a-problem-with/town-owned-roadways",
             },
             "general_info": {
-                "description": "Hours, phone numbers, permits, parks, and other info",
+                "description": "General Town information & datasets",
                 "fields": [],
-                "link": "https://example.org/city-info",
+                "link": "https://opendata.townofmorrisville.org",
             },
         },
     }
 
+# ---------- Simple rules NLU ----------
 INTENT_PATTERNS = [
     ("pothole", ["pothole", "road hole", "asphalt", "road damage", "street crack"]),
     ("trash_schedule", ["trash", "garbage", "recycle", "pickup", "collection", "bin"]),
@@ -88,7 +95,7 @@ INTENT_PATTERNS = [
 REQUIRED_FIELDS = {
     "pothole": ["street_address", "description"],
     "trash_schedule": ["street_address"],
-    "noise_complaint": ["incident_time", "location", "description"],
+    "noise_complaint": ["location", "description"],
     "streetlight": ["nearest_address"],
     "stray_animal": ["location", "animal_type"],
 }
@@ -271,9 +278,9 @@ with st.sidebar:
         st.experimental_rerun()
 
 # ---------- MAIN (Input-first, then render transcript) ----------
-st.title("🧰 311 AI Agent — Streamlit App")
+st.title("🧰 311 AI Agent — Streamlit App (Morrisville, NC)")
 bubble_left("To protect your personal data, please don’t share sensitive info (like full card details or SSN).")
-bubble_left("Hello! I’m your 311 virtual assistant. Type `menu` to see services or ask directly.")
+bubble_left("Hello! I’m your 311 virtual assistant for Morrisville, NC. Type `menu` to see services or ask directly.")
 
 # Ensure one initial assistant message
 if not any(m["role"] == "assistant" for m in st.session_state.messages):
