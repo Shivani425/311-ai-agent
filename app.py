@@ -1,10 +1,12 @@
-# app.py — NC 311 Agent (multi-city + geocoding + ZIP validation + SQLite + Admin view)
-import re, random, csv, io, json, os, sqlite3, requests
+# app.py — NC 311 Agent (multi-city + geocoding provider switch + ZIP validation + SQLite + Admin)
+import os, re, random, csv, io, json, sqlite3, requests
 from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-# ---------- Page chrome ----------
+# ==============================
+# Page chrome
+# ==============================
 st.set_page_config(page_title="NC 311 Agent", page_icon="🧰", layout="wide")
 st.markdown("""
 <style>
@@ -20,7 +22,9 @@ st.markdown("""
 def bleft(t:str):  st.markdown(f'<div class="bubble left">{t}</div>', unsafe_allow_html=True)
 def bright(t:str): st.markdown(f'<div class="bubble right">{t}</div>', unsafe_allow_html=True)
 
-# ---------- Utils ----------
+# ==============================
+# Utils
+# ==============================
 def make_ticket(prefix="NC"):
     return f"{prefix}-{datetime.now().strftime('%y%m%d')}-{random.randint(1000,9999)}"
 
@@ -33,7 +37,9 @@ def contains_any(text, keys):
 
 ZIP_RE = re.compile(r"^\d{5}$")
 
-# ---------- SQLite persistence ----------
+# ==============================
+# SQLite persistence
+# ==============================
 DB_PATH = os.path.join(os.getcwd(), "tickets.db")
 
 def db_init():
@@ -61,9 +67,11 @@ def db_save(row: dict):
 
 db_init()
 
-# ---------- NC jurisdiction config (add/replace links as you confirm them) ----------
+# ==============================
+# NC jurisdiction config
+# (swap links with official pages when you have them)
+# ==============================
 NC_JURIS_CONFIG = {
-    # --- Fully wired example ---
     "Morrisville": {
         "pothole": {
             "description": "Report a pothole or road issue on Town-owned roads",
@@ -92,209 +100,105 @@ NC_JURIS_CONFIG = {
             "fields": ["location", "animal_type", "description"],
             "link": "https://www.morrisvillenc.gov/services/report-a-problem-with/town-owned-roadways",
         },
-        "general_info": {
-            "description": "General Town information & datasets",
-            "fields": [],
-            "link": "https://opendata.townofmorrisville.org",
-        },
+        "general_info": {"description": "General Town information & datasets", "fields": [], "link": "https://opendata.townofmorrisville.org"},
     },
 
-    # --- Triangle area ---
+    # Triangle area
     "Raleigh": {
-        "pothole": {"description":"Report a pothole or street maintenance issue",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://raleighnc.gov/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://raleighnc.gov/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://raleighnc.gov/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://raleighnc.gov/"},
+        "pothole": {"description":"Report a pothole or street maintenance issue","fields":["street_address","description","photo_url_optional"],"link":"https://raleighnc.gov/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://raleighnc.gov/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://raleighnc.gov/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://raleighnc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://raleighnc.gov/"},
     },
     "Durham": {
-        "pothole": {"description":"Report pothole or roadway issue",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://durhamnc.gov/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://durhamnc.gov/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://durhamnc.gov/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://durhamnc.gov/"},
+        "pothole": {"description":"Report pothole or roadway issue","fields":["street_address","description","photo_url_optional"],"link":"https://durhamnc.gov/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://durhamnc.gov/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://durhamnc.gov/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://durhamnc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://durhamnc.gov/"},
     },
     "Cary": {
-        "pothole": {"description":"Report a pothole/road issue (Town of Cary)",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.townofcary.org/"},
-        "trash_schedule":{"description":"Find curbside collection day (Cary)",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.townofcary.org/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.townofcary.org/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.townofcary.org/"},
+        "pothole": {"description":"Report a pothole/road issue (Town of Cary)","fields":["street_address","description","photo_url_optional"],"link":"https://www.townofcary.org/"},
+        "trash_schedule":{"description":"Find curbside collection day (Cary)","fields":["street_address","zip_optional"],"link":"https://www.townofcary.org/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.townofcary.org/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.townofcary.org/"},
         "general_info":{"description":"General town information","fields":[],"link":"https://www.townofcary.org/"},
     },
     "Chapel Hill": {
-        "pothole": {"description":"Report pothole/streets issue",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.townofchapelhill.org/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.townofchapelhill.org/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.townofchapelhill.org/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.townofchapelhill.org/"},
+        "pothole": {"description":"Report pothole/streets issue","fields":["street_address","description","photo_url_optional"],"link":"https://www.townofchapelhill.org/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.townofchapelhill.org/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.townofchapelhill.org/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.townofchapelhill.org/"},
         "general_info":{"description":"General town information","fields":[],"link":"https://www.townofchapelhill.org/"},
     },
 
-    # --- Major metros ---
+    # Major metros
     "Charlotte": {
-        "pothole": {"description":"Report street/road maintenance issue",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.charlottenc.gov/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.charlottenc.gov/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.charlottenc.gov/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.charlottenc.gov/"},
+        "pothole": {"description":"Report street/road maintenance issue","fields":["street_address","description","photo_url_optional"],"link":"https://www.charlottenc.gov/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.charlottenc.gov/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.charlottenc.gov/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.charlottenc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://www.charlottenc.gov/"},
     },
     "Greensboro": {
-        "pothole": {"description":"Report pothole or street issue",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.greensboro-nc.gov/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.greensboro-nc.gov/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.greensboro-nc.gov/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.greensboro-nc.gov/"},
+        "pothole": {"description":"Report pothole or street issue","fields":["street_address","description","photo_url_optional"],"link":"https://www.greensboro-nc.gov/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.greensboro-nc.gov/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.greensboro-nc.gov/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.greensboro-nc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://www.greensboro-nc.gov/"},
     },
     "Wilmington": {
-        "pothole": {"description":"Report pothole or roadway issue",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.wilmingtonnc.gov/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.wilmingtonnc.gov/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.wilmingtonnc.gov/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.wilmingtonnc.gov/"},
+        "pothole": {"description":"Report pothole or roadway issue","fields":["street_address","description","photo_url_optional"],"link":"https://www.wilmingtonnc.gov/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.wilmingtonnc.gov/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.wilmingtonnc.gov/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.wilmingtonnc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://www.wilmingtonnc.gov/"},
     },
     "Asheville": {
-        "pothole": {"description":"Report pothole or street maintenance",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.ashevillenc.gov/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.ashevillenc.gov/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.ashevillenc.gov/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.ashevillenc.gov/"},
+        "pothole": {"description":"Report pothole or street maintenance","fields":["street_address","description","photo_url_optional"],"link":"https://www.ashevillenc.gov/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.ashevillenc.gov/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.ashevillenc.gov/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.ashevillenc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://www.ashevillenc.gov/"},
     },
 
-    # --- Wake county neighbors ---
+    # Wake County neighbors
     "Apex": {
-        "pothole": {"description":"Report pothole or public works issue (Apex)",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.apexnc.org/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.apexnc.org/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.apexnc.org/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.apexnc.org/"},
+        "pothole": {"description":"Report pothole or public works issue (Apex)","fields":["street_address","description","photo_url_optional"],"link":"https://www.apexnc.org/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.apexnc.org/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.apexnc.org/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.apexnc.org/"},
         "general_info":{"description":"General town information","fields":[],"link":"https://www.apexnc.org/"},
     },
     "Wake Forest": {
-        "pothole": {"description":"Report pothole or street issue",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.wakeforestnc.gov/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.wakeforestnc.gov/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.wakeforestnc.gov/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.wakeforestnc.gov/"},
+        "pothole": {"description":"Report pothole or street issue","fields":["street_address","description","photo_url_optional"],"link":"https://www.wakeforestnc.gov/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.wakeforestnc.gov/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.wakeforestnc.gov/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.wakeforestnc.gov/"},
         "general_info":{"description":"General town information","fields":[],"link":"https://www.wakeforestnc.gov/"},
     },
 
-    # --- Sandhills & Triad additions ---
+    # Sandhills & Triad
     "Fayetteville": {
-        "pothole": {"description":"Report pothole or street maintenance",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.fayettevillenc.gov/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.fayettevillenc.gov/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.fayettevillenc.gov/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.fayettevillenc.gov/"},
+        "pothole": {"description":"Report pothole or street maintenance","fields":["street_address","description","photo_url_optional"],"link":"https://www.fayettevillenc.gov/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.fayettevillenc.gov/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.fayettevillenc.gov/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.fayettevillenc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://www.fayettevillenc.gov/"},
     },
     "High Point": {
-        "pothole": {"description":"Report pothole or street maintenance",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.highpointnc.gov/"},
-        "trash_schedule":{"description":"Find trash & recycling day",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.highpointnc.gov/"},
-        "noise_complaint":{"description":"Report noise disturbance",
-                           "fields":["location","description"],
-                           "link":"https://www.highpointnc.gov/"},
-        "streetlight":{"description":"Report a streetlight outage",
-                       "fields":["nearest_address","description"],
-                       "link":"https://www.highpointnc.gov/"},
+        "pothole": {"description":"Report pothole or street maintenance","fields":["street_address","description","photo_url_optional"],"link":"https://www.highpointnc.gov/"},
+        "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.highpointnc.gov/"},
+        "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.highpointnc.gov/"},
+        "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.highpointnc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://www.highpointnc.gov/"},
     },
 
-    # --- Fallback for any city not listed above ---
+    # Fallback
     "_DEFAULT": {
-        "pothole": {"description":"Report a pothole or road issue",
-                    "fields":["street_address","description","photo_url_optional"],
-                    "link":"https://www.ncdot.gov/contact/Pages/default.aspx"},
-        "trash_schedule":{"description":"Find trash & recycling pickup day (check your city’s sanitation page)",
-                          "fields":["street_address","zip_optional"],
-                          "link":"https://www.nc.gov/"},
+        "pothole": {"description":"Report a pothole or road issue","fields":["street_address","description","photo_url_optional"],"link":"https://www.ncdot.gov/contact/Pages/default.aspx"},
+        "trash_schedule":{"description":"Find trash & recycling pickup day (check your city’s sanitation page)","fields":["street_address","zip_optional"],"link":"https://www.nc.gov/"},
         "noise_complaint":{"description":"Report noise disturbance","fields":["location","description"],"link":"https://www.nc.gov/"},
         "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.ncdot.gov/"},
         "stray_animal":{"description":"Report a stray or lost animal","fields":["location","animal_type","description"],"link":"https://www.nc.gov/"},
@@ -308,43 +212,96 @@ def make_city_profile(city="Morrisville", state="North Carolina"):
     services = {k: dict(v) for k, v in base.items()}  # shallow copy
     return {"meta": {"city": city, "state": state}, "services": services}
 
-# ---------- Geocoding (US Census, no key) ----------
+# ==============================
+# Geocoding providers
+# ==============================
+GOOGLE_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
 CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
-def geocode_address(raw: str, city_hint: str | None, state_hint: str = "North Carolina"):
+NOMINATIM_SEARCH = "https://nominatim.openstreetmap.org/search"
+GOOGLE_GEOCODE = "https://maps.googleapis.com/maps/api/geocode/json"
+GOOGLE_AUTOCOMPLETE = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
+GOOGLE_PLACE_DETAILS = "https://maps.googleapis.com/maps/api/place/details/json"
+
+def geocode_census(raw: str, city_hint: str|None, state_hint: str="North Carolina"):
     oneline = raw if not city_hint else f"{raw}, {city_hint}, {state_hint}"
     try:
-        r = requests.get(CENSUS_URL, params={
-            "address": oneline, "benchmark": "Public_AR_Current", "format": "json"
-        }, timeout=10)
+        r = requests.get(CENSUS_URL, params={"address": oneline, "benchmark": "Public_AR_Current", "format": "json"}, timeout=10)
         r.raise_for_status()
-        data = r.json()
-        matches = data.get("result", {}).get("addressMatches", [])
+        matches = r.json().get("result", {}).get("addressMatches", [])
         if not matches and city_hint:
-            r2 = requests.get(CENSUS_URL, params={
-                "address": raw, "benchmark": "Public_AR_Current", "format": "json"
-            }, timeout=10)
+            r2 = requests.get(CENSUS_URL, params={"address": raw, "benchmark": "Public_AR_Current", "format": "json"}, timeout=10)
             r2.raise_for_status()
-            data = r2.json()
-            matches = data.get("result", {}).get("addressMatches", [])
-            if not matches: return None
-        elif not matches:
-            return None
+            matches = r2.json().get("result", {}).get("addressMatches", [])
+        if not matches: return None
+        m = matches[0]; comps = m.get("addressComponents", {}); coords = m.get("coordinates", {})
+        return {"matched": m.get("matchedAddress"), "city": comps.get("city"), "state": comps.get("state"),
+                "zip": comps.get("zip"), "lon": coords.get("x"), "lat": coords.get("y")}
+    except Exception:
+        return None
 
-        m = matches[0]
-        comps = m.get("addressComponents", {})
-        coords = m.get("coordinates", {})
+def geocode_nominatim(query: str):
+    # Nominatim terms: include a UA and use light traffic
+    try:
+        r = requests.get(NOMINATIM_SEARCH, params={"q": query, "format":"jsonv2", "addressdetails":1, "limit":1, "countrycodes":"us"},
+                         headers={"User-Agent":"nc-311-agent/1.0"}, timeout=10)
+        r.raise_for_status()
+        rows = r.json()
+        if not rows: return None
+        a = rows[0]
+        addr = a.get("address", {})
         return {
-            "matched": m.get("matchedAddress"),
-            "city": comps.get("city"),
-            "state": comps.get("state"),
-            "zip": comps.get("zip"),
-            "lon": coords.get("x"),
-            "lat": coords.get("y"),
+            "matched": a.get("display_name"),
+            "city": addr.get("city") or addr.get("town") or addr.get("village") or addr.get("hamlet"),
+            "state": addr.get("state"),
+            "zip": addr.get("postcode"),
+            "lon": float(a.get("lon")) if a.get("lon") else None,
+            "lat": float(a.get("lat")) if a.get("lat") else None,
         }
     except Exception:
         return None
 
-# ---------- NLU + slots ----------
+def geocode_google(address: str):
+    if not GOOGLE_KEY: return None
+    try:
+        r = requests.get(GOOGLE_GEOCODE, params={"address": address, "components":"country:US", "key": GOOGLE_KEY}, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("status") != "OK" or not data.get("results"): return None
+        res = data["results"][0]
+        comps = {c["types"][0]: c["long_name"] for c in res["address_components"]}
+        city = comps.get("locality") or comps.get("postal_town") or comps.get("sublocality") or comps.get("administrative_area_level_3")
+        state = comps.get("administrative_area_level_1")
+        zipc = comps.get("postal_code")
+        loc = res.get("geometry", {}).get("location", {})
+        return {"matched": res.get("formatted_address"), "city": city, "state": state, "zip": zipc,
+                "lon": loc.get("lng"), "lat": loc.get("lat")}
+    except Exception:
+        return None
+
+def autocomplete_google(query: str):
+    """Return up to 5 suggestion strings using Places Autocomplete, restricted to US."""
+    if not GOOGLE_KEY: return []
+    try:
+        r = requests.get(GOOGLE_AUTOCOMPLETE, params={"input": query, "components":"country:us", "types":"geocode", "key": GOOGLE_KEY}, timeout=10)
+        r.raise_for_status()
+        preds = r.json().get("predictions", [])
+        return [p["description"] for p in preds[:5]]
+    except Exception:
+        return []
+
+def geocode_any(raw: str, city_hint: str, provider: str):
+    if provider == "Google (Geocoding)" and GOOGLE_KEY:
+        out = geocode_google(f"{raw}, {city_hint}, North Carolina")
+        if not out: out = geocode_google(raw)
+        return out
+    if provider == "OpenStreetMap (Nominatim)":
+        return geocode_nominatim(f"{raw}, {city_hint}, North Carolina")
+    # default Census
+    return geocode_census(raw, city_hint, "North Carolina")
+
+# ==============================
+# NLU / Slot config
+# ==============================
 INTENT_PATTERNS = [
     ("pothole", ["pothole", "road hole", "asphalt", "road damage", "street crack"]),
     ("trash_schedule", ["trash", "garbage", "recycle", "pickup", "collection", "bin"]),
@@ -382,15 +339,22 @@ def detect_intent(text:str):
     if t in ["help","menu","hi","hello","start"]: return "menu"
     return "unknown"
 
-# ---------- Session ----------
+# ==============================
+# Session
+# ==============================
 if "city_cfg" not in st.session_state:      st.session_state.city_cfg = make_city_profile()
 if "messages" not in st.session_state:      st.session_state.messages = []
 if "active_intent" not in st.session_state: st.session_state.active_intent = None
 if "pending_fields" not in st.session_state:st.session_state.pending_fields = []
 if "filled_fields" not in st.session_state: st.session_state.filled_fields = {}
 if "ticket_log" not in st.session_state:    st.session_state.ticket_log = []
+if "addr_results" not in st.session_state:  st.session_state.addr_results = []
+if "addr_query" not in st.session_state:    st.session_state.addr_query = ""
+if "addr_provider" not in st.session_state: st.session_state.addr_provider = "Census (free)"
 
-# ---------- Helpers ----------
+# ==============================
+# Helpers
+# ==============================
 def show_menu():
     svcs = st.session_state.city_cfg["services"]
     bullets = "\n".join([f"- **{k}** — {v['description']}" for k,v in svcs.items()])
@@ -417,17 +381,12 @@ def maybe_ncdot_note(address:str)->str|None:
     return None
 
 def lookup_trash_day(address:str, zip_code:str|None)->str|None:
-    """Demo rule-based estimator to show inline pickup day. Replace with a real API when ready."""
+    # Demo: simple pattern rules — replace with a real dataset/API later.
     a = normalize(address)
-    rules = {
-        "davis dr": "Wednesday",
-        "davis drive": "Wednesday",
-        "morrisville parkway": "Thursday",
-        "chapel hill rd": "Thursday",
-        "nc 55": "Monday",
-        "nc-55": "Monday",
-    }
-    for k, v in rules.items():
+    rules = {"davis dr": "Wednesday", "davis drive": "Wednesday",
+             "morrisville parkway": "Thursday", "chapel hill rd": "Thursday",
+             "nc 55": "Monday", "nc-55": "Monday"}
+    for k,v in rules.items():
         if k in a: return v
     return None
 
@@ -447,24 +406,21 @@ def finalize_case():
         est = lookup_trash_day(payload.get("street_address",""), payload.get("zip_optional"))
         if est: payload["estimated_pickup_day"] = est
 
-    row = {
-        "ticket_id": ticket_id, "service": intent, "city": meta["city"], "state": meta["state"],
-        "payload": payload, "created_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    st.session_state.ticket_log.append(row)
-    db_save(row)
+    row = {"ticket_id": ticket_id, "service": intent, "city": meta["city"], "state": meta["state"],
+           "payload": payload, "created_at": datetime.now().isoformat(timespec="seconds")}
+    st.session_state.ticket_log.append(row); db_save(row)
 
     msg = (f"✅ **Submitted** your *{intent.replace('_',' ')}* request.\n\n"
            f"- Ticket ID: **{ticket_id}**\n- City: **{meta['city']}, {meta['state']}**\n"
            f"- Intake fields: `{payload}`\n- Reference: {svc.get('link','(no link)')}\n")
-    if "sla_days" in svc:
-        msg += f"- Estimated resolution target: **~{svc['sla_days']} business days**\n"
+    if "sla_days" in svc: msg += f"- Estimated resolution target: **~{svc['sla_days']} business days**\n"
     if intent == "trash_schedule" and payload.get("estimated_pickup_day"):
         msg += f"- **Estimated pickup day:** {payload['estimated_pickup_day']}\n"
     return msg + "\nAnything else I can do? Type `menu`."
 
-# ---------- Dispatcher (no re-intent mid-form + geocoding + ZIP validation) ----------
-CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
+# ==============================
+# Dispatcher (with geocoding + ZIP validation)
+# ==============================
 def push_user_and_process(text: str):
     st.session_state.messages.append({"role": "user", "content": text})
     tnorm = normalize(text)
@@ -480,8 +436,7 @@ def push_user_and_process(text: str):
     # mid-form
     if st.session_state.active_intent and st.session_state.pending_fields:
         if tnorm == "menu":
-            st.session_state.messages.append({"role":"assistant","content": show_menu()})
-            return
+            st.session_state.messages.append({"role":"assistant","content": show_menu()}); return
         if tnorm == "cancel":
             st.session_state.active_intent = None
             st.session_state.pending_fields = []
@@ -494,8 +449,7 @@ def push_user_and_process(text: str):
 
         # ZIP validation nudge
         if field == "zip_optional" and val and not ZIP_RE.match(val):
-            st.session_state.messages.append({"role":"assistant",
-                "content":"Please enter a 5-digit ZIP (e.g., 27560) or say `skip`."})
+            st.session_state.messages.append({"role":"assistant","content":"Please enter a 5-digit ZIP (e.g., 27560) or say `skip`."})
             return
 
         if tnorm == "skip" and field.endswith("_optional"):
@@ -503,58 +457,34 @@ def push_user_and_process(text: str):
         else:
             st.session_state.filled_fields[field] = val
 
-        # Real-time geocoding when an address field is provided
+        # Geocode on address fields
         if field in {"street_address", "nearest_address"} and val:
             meta = st.session_state.city_cfg["meta"]
-            # Geocode (with city & state hint first)
-            try:
-                r = requests.get(CENSUS_URL, params={
-                    "address": f"{val}, {meta.get('city')}, {meta.get('state','North Carolina')}",
-                    "benchmark": "Public_AR_Current", "format": "json"
-                }, timeout=10)
-                r.raise_for_status()
-                data = r.json()
-                matches = data.get("result", {}).get("addressMatches", [])
-                if not matches:
-                    # Retry without hint
-                    r2 = requests.get(CENSUS_URL, params={
-                        "address": val, "benchmark": "Public_AR_Current", "format": "json"
-                    }, timeout=10)
-                    r2.raise_for_status()
-                    data = r2.json()
-                    matches = data.get("result", {}).get("addressMatches", [])
-                if matches:
-                    m = matches[0]
-                    comps = m.get("addressComponents", {})
-                    coords = m.get("coordinates", {})
-                    geo = {
-                        "matched": m.get("matchedAddress"),
-                        "city": comps.get("city"),
-                        "state": comps.get("state"),
-                        "zip": comps.get("zip"),
-                        "lon": coords.get("x"),
-                        "lat": coords.get("y"),
-                    }
-                    st.session_state.filled_fields["address_verified"] = geo
-                    lat = f"{geo['lat']:.5f}" if isinstance(geo.get("lat"), (int,float)) else geo.get("lat")
-                    lon = f"{geo['lon']:.5f}" if isinstance(geo.get("lon"), (int,float)) else geo.get("lon")
-                    st.session_state.messages.append({"role":"assistant",
-                        "content": f"📍 I standardized the address to **{geo['matched']}** (lat {lat}, lon {lon})."})
-
-                    # Auto-switch city if recognized and different
-                    detected_city = (geo.get("city") or "").title()
-                    detected_state = geo.get("state")
-                    if detected_state in {"NC","North Carolina"} and detected_city and \
-                       detected_city != meta["city"] and detected_city in NC_JURIS_CONFIG:
-                        st.session_state.city_cfg = make_city_profile(detected_city, "North Carolina")
-                        st.session_state.messages.append({"role":"assistant",
-                            "content": f"🔁 Detected **{detected_city}, NC** — switched to that city’s services."})
-                else:
-                    st.session_state.messages.append({"role":"assistant",
-                        "content":"⚠️ I couldn’t verify that address. I’ll continue, but you can re-enter it if needed."})
-            except Exception:
+            provider = st.session_state.addr_provider
+            prov_label = {"Census (free)":"Census","OpenStreetMap (Nominatim)":"Nominatim","Google (Geocoding)":"Google"}\
+                         .get(provider, provider)
+            geo = geocode_any(val, meta.get("city",""), provider)
+            if geo:
+                st.session_state.filled_fields["address_verified"] = {
+                    "matched": geo["matched"], "city": geo["city"], "state": geo["state"],
+                    "zip": geo["zip"], "lat": geo["lat"], "lon": geo["lon"], "provider": prov_label
+                }
+                lat = f"{geo['lat']:.5f}" if isinstance(geo.get("lat"), (int,float)) else geo.get("lat")
+                lon = f"{geo['lon']:.5f}" if isinstance(geo.get("lon"), (int,float)) else geo.get("lon")
                 st.session_state.messages.append({"role":"assistant",
-                    "content":"⚠️ Address verification service is unavailable right now. I’ll continue."})
+                    "content": f"📍 *(via {prov_label})* standardized to **{geo['matched']}** (lat {lat}, lon {lon})."})
+
+                # Auto-switch city if recognized and different
+                detected_city = (geo.get("city") or "").title()
+                detected_state = geo.get("state")
+                if detected_state in {"NC","North Carolina"} and detected_city and \
+                   detected_city != meta["city"] and detected_city in NC_JURIS_CONFIG:
+                    st.session_state.city_cfg = make_city_profile(detected_city, "North Carolina")
+                    st.session_state.messages.append({"role":"assistant",
+                        "content": f"🔁 Detected **{detected_city}, NC** — switched to that city’s services."})
+            else:
+                st.session_state.messages.append({"role":"assistant",
+                    "content":"⚠️ I couldn’t verify that address. I’ll continue, but you can re-enter it or use the Address Helper."})
 
         nxt = next_slot_question()
         if nxt:
@@ -570,8 +500,8 @@ def push_user_and_process(text: str):
     # fresh intent
     intent = detect_intent(text)
     if intent == "menu":
-        st.session_state.messages.append({"role":"assistant","content": show_menu()})
-        return
+        st.session_state.messages.append({"role":"assistant","content": show_menu()}); return
+
     if intent == "adapt_city":
         city, state = "Your City", "North Carolina"
         t = tnorm
@@ -579,11 +509,9 @@ def push_user_and_process(text: str):
             try:
                 city = t.split("name is",1)[1].split("in the state",1)[0].strip(" .,:;").title()
                 state = t.split("in the state",1)[1].strip(" .,:;").title()
-            except Exception:
-                pass
+            except Exception: pass
         st.session_state.city_cfg = make_city_profile(city, state)
-        st.session_state.messages.append({"role":"assistant",
-                                          "content": f"👍 Adapted to **{city}, {state}**. Type `menu`."})
+        st.session_state.messages.append({"role":"assistant","content": f"👍 Adapted to **{city}, {state}**. Type `menu`."})
         return
 
     if intent in st.session_state.city_cfg["services"]:
@@ -596,18 +524,20 @@ def push_user_and_process(text: str):
         else:
             svc = st.session_state.city_cfg["services"][intent]
             st.session_state.messages.append({"role":"assistant",
-                "content": f"**{intent.replace('_',' ').title()}** — {svc['description']}\n\n"
-                           f"More info: {svc.get('link','(no link)')}"})
+                "content": f"**{intent.replace('_',' ').title()}** — {svc['description']}\n\nMore info: {svc.get('link','(no link)')}"})
         return
 
     st.session_state.messages.append({"role":"assistant",
         "content": "I’m not sure I understood. Type `menu`, or try 'Report a pothole', 'Trash pickup day', or 'Streetlight out'."})
 
-# ---------- Sidebar ----------
+# ==============================
+# Sidebar (city picker + Address Helper + Admin)
+# ==============================
 with st.sidebar:
     st.markdown("## NC 311 Agent")
     meta = st.session_state.city_cfg["meta"]
-    st.caption("Choose city (North Carolina). Each city can have custom workflows & links.")
+
+    # City picker
     city_list = NC_CITIES or ["Morrisville"]
     try:
         idx = city_list.index(meta["city"]) if meta["city"] in city_list else 0
@@ -618,12 +548,59 @@ with st.sidebar:
         st.session_state.city_cfg = make_city_profile(selected_city, "North Carolina")
         st.success(f"Adapted to {selected_city}, North Carolina")
 
+    st.divider()
+    # Address Helper (autocomplete + geocode)
+    st.markdown("**Address Helper** (optional)")
+    provider = st.selectbox("Provider", ["Census (free)", "OpenStreetMap (Nominatim)", "Google (Geocoding)"], index=0)
+    st.session_state.addr_provider = provider
+
+    # Autocomplete (Google) / multi-suggest (OSM)
+    st.session_state.addr_query = st.text_input("Search or paste an address", value=st.session_state.addr_query)
+    if st.button("Find address"):
+        q = st.session_state.addr_query.strip()
+        st.session_state.addr_results = []
+        if not q:
+            st.info("Type an address to search.")
+        else:
+            if provider == "Google (Geocoding)":
+                if GOOGLE_KEY:
+                    # Use Places Autocomplete for suggestions
+                    suggestions = autocomplete_google(q)
+                    if not suggestions:
+                        st.session_state.addr_results = []
+                        st.warning("No suggestions from Google Autocomplete.")
+                    else:
+                        st.session_state.addr_results = suggestions
+                else:
+                    st.warning("Set GOOGLE_MAPS_API_KEY to use Google suggestions.")
+            elif provider == "OpenStreetMap (Nominatim)":
+                try:
+                    r = requests.get(NOMINATIM_SEARCH, params={"q": q, "format":"jsonv2", "addressdetails":1, "limit":5, "countrycodes":"us"},
+                                     headers={"User-Agent":"nc-311-agent/1.0"}, timeout=10)
+                    r.raise_for_status()
+                    arr = r.json()
+                    st.session_state.addr_results = [a.get("display_name") for a in arr[:5]]
+                except Exception as e:
+                    st.warning(f"Nominatim error: {e}")
+            else:
+                # Census doesn't really do autocomplete; just try a direct match for convenience
+                geo = geocode_census(q, meta.get("city"), "North Carolina")
+                st.session_state.addr_results = [geo["matched"]] if geo else []
+
+    if st.session_state.addr_results:
+        choice = st.radio("Pick one", options=st.session_state.addr_results, index=0)
+        if st.button("Use this address"):
+            # Push into the convo as the next answer
+            push_user_and_process(choice)
+            st.experimental_rerun()
+
+    # Recent tickets
     if st.session_state.ticket_log:
         st.divider(); st.markdown("**Recent Tickets**")
         for t in st.session_state.ticket_log[-6:][::-1]:
             st.write(f"• {t['ticket_id']} — {t['service']} — {t['city']}")
 
-    # Admin view
+    # Admin
     st.divider()
     show_admin = st.checkbox("Admin: show latest 20 tickets")
     if show_admin:
@@ -648,7 +625,9 @@ with st.sidebar:
         st.session_state.filled_fields = {}
         st.experimental_rerun()
 
-# ---------- Main (input-first, then render) ----------
+# ==============================
+# Main
+# ==============================
 st.title("🧰 North Carolina 311 Agent")
 bleft("To protect your personal data, please don’t share sensitive info (like full card details or SSN).")
 bleft("Hello! I’m your NC 311 assistant. Type `menu` to see services or ask directly.")
@@ -665,15 +644,12 @@ if user_input:
 for m in st.session_state.messages:
     (bright if m["role"]=="user" else bleft)(m["content"])
 
-# ---------- Export CSV ----------
 st.divider()
 if st.session_state.ticket_log:
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=["ticket_id","service","city","state","payload","created_at"])
     writer.writeheader()
     for r in st.session_state.ticket_log:
-        row = r.copy()
-        row["payload"] = json.dumps(row["payload"], ensure_ascii=False)
+        row = r.copy(); row["payload"] = json.dumps(row["payload"], ensure_ascii=False)
         writer.writerow(row)
     st.download_button("⬇️ Download tickets.csv", out.getvalue(), "tickets.csv", "text/csv")
-
