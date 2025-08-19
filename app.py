@@ -1,4 +1,4 @@
-# app.py — NC 311 Agent (multi-city + geocoding provider switch + ZIP validation + SQLite + Admin)
+# app.py — North Carolina 311 Agent (cities + geocoding + ZIP validation + SQLite + Admin)
 import os, re, random, csv, io, json, sqlite3, requests
 from datetime import datetime
 import pandas as pd
@@ -68,8 +68,7 @@ def db_save(row: dict):
 db_init()
 
 # ==============================
-# NC jurisdiction config
-# (swap links with official pages when you have them)
+# NC jurisdiction config (swap links to real portals later)
 # ==============================
 NC_JURIS_CONFIG = {
     "Morrisville": {
@@ -80,12 +79,12 @@ NC_JURIS_CONFIG = {
             "sla_days": 5,
         },
         "trash_schedule": {
-            "description": "Find trash & recycling pickup day (Open Data reference)",
+            "description": "Find trash & recycling pickup day",
             "fields": ["street_address", "zip_optional"],
             "link": "https://opendata.townofmorrisville.org/explore/dataset/town-resources/api/",
         },
         "noise_complaint": {
-            "description": "Report excessive noise (route via Town portal)",
+            "description": "Report excessive noise",
             "fields": ["location", "description"],
             "link": "https://www.morrisvillenc.gov/services/report-a-problem-with/town-owned-roadways",
         },
@@ -102,8 +101,6 @@ NC_JURIS_CONFIG = {
         },
         "general_info": {"description": "General Town information & datasets", "fields": [], "link": "https://opendata.townofmorrisville.org"},
     },
-
-    # Triangle area
     "Raleigh": {
         "pothole": {"description":"Report a pothole or street maintenance issue","fields":["street_address","description","photo_url_optional"],"link":"https://raleighnc.gov/"},
         "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://raleighnc.gov/"},
@@ -132,8 +129,6 @@ NC_JURIS_CONFIG = {
         "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.townofchapelhill.org/"},
         "general_info":{"description":"General town information","fields":[],"link":"https://www.townofchapelhill.org/"},
     },
-
-    # Major metros
     "Charlotte": {
         "pothole": {"description":"Report street/road maintenance issue","fields":["street_address","description","photo_url_optional"],"link":"https://www.charlottenc.gov/"},
         "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.charlottenc.gov/"},
@@ -162,8 +157,6 @@ NC_JURIS_CONFIG = {
         "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.ashevillenc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://www.ashevillenc.gov/"},
     },
-
-    # Wake County neighbors
     "Apex": {
         "pothole": {"description":"Report pothole or public works issue (Apex)","fields":["street_address","description","photo_url_optional"],"link":"https://www.apexnc.org/"},
         "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.apexnc.org/"},
@@ -178,8 +171,6 @@ NC_JURIS_CONFIG = {
         "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.wakeforestnc.gov/"},
         "general_info":{"description":"General town information","fields":[],"link":"https://www.wakeforestnc.gov/"},
     },
-
-    # Sandhills & Triad
     "Fayetteville": {
         "pothole": {"description":"Report pothole or street maintenance","fields":["street_address","description","photo_url_optional"],"link":"https://www.fayettevillenc.gov/"},
         "trash_schedule":{"description":"Find trash & recycling day","fields":["street_address","zip_optional"],"link":"https://www.fayettevillenc.gov/"},
@@ -194,8 +185,6 @@ NC_JURIS_CONFIG = {
         "streetlight":{"description":"Report a streetlight outage","fields":["nearest_address","description"],"link":"https://www.highpointnc.gov/"},
         "general_info":{"description":"General city information","fields":[],"link":"https://www.highpointnc.gov/"},
     },
-
-    # Fallback
     "_DEFAULT": {
         "pothole": {"description":"Report a pothole or road issue","fields":["street_address","description","photo_url_optional"],"link":"https://www.ncdot.gov/contact/Pages/default.aspx"},
         "trash_schedule":{"description":"Find trash & recycling pickup day (check your city’s sanitation page)","fields":["street_address","zip_optional"],"link":"https://www.nc.gov/"},
@@ -209,7 +198,7 @@ NC_CITIES = sorted([c for c in NC_JURIS_CONFIG.keys() if c != "_DEFAULT"])
 
 def make_city_profile(city="Morrisville", state="North Carolina"):
     base = NC_JURIS_CONFIG.get(city, NC_JURIS_CONFIG["_DEFAULT"])
-    services = {k: dict(v) for k, v in base.items()}  # shallow copy
+    services = {k: dict(v) for k, v in base.items()}
     return {"meta": {"city": city, "state": state}, "services": services}
 
 # ==============================
@@ -220,7 +209,6 @@ CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress
 NOMINATIM_SEARCH = "https://nominatim.openstreetmap.org/search"
 GOOGLE_GEOCODE = "https://maps.googleapis.com/maps/api/geocode/json"
 GOOGLE_AUTOCOMPLETE = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
-GOOGLE_PLACE_DETAILS = "https://maps.googleapis.com/maps/api/place/details/json"
 
 def geocode_census(raw: str, city_hint: str|None, state_hint: str="North Carolina"):
     oneline = raw if not city_hint else f"{raw}, {city_hint}, {state_hint}"
@@ -240,7 +228,6 @@ def geocode_census(raw: str, city_hint: str|None, state_hint: str="North Carolin
         return None
 
 def geocode_nominatim(query: str):
-    # Nominatim terms: include a UA and use light traffic
     try:
         r = requests.get(NOMINATIM_SEARCH, params={"q": query, "format":"jsonv2", "addressdetails":1, "limit":1, "countrycodes":"us"},
                          headers={"User-Agent":"nc-311-agent/1.0"}, timeout=10)
@@ -279,7 +266,6 @@ def geocode_google(address: str):
         return None
 
 def autocomplete_google(query: str):
-    """Return up to 5 suggestion strings using Places Autocomplete, restricted to US."""
     if not GOOGLE_KEY: return []
     try:
         r = requests.get(GOOGLE_AUTOCOMPLETE, params={"input": query, "components":"country:us", "types":"geocode", "key": GOOGLE_KEY}, timeout=10)
@@ -296,7 +282,6 @@ def geocode_any(raw: str, city_hint: str, provider: str):
         return out
     if provider == "OpenStreetMap (Nominatim)":
         return geocode_nominatim(f"{raw}, {city_hint}, North Carolina")
-    # default Census
     return geocode_census(raw, city_hint, "North Carolina")
 
 # ==============================
@@ -381,7 +366,6 @@ def maybe_ncdot_note(address:str)->str|None:
     return None
 
 def lookup_trash_day(address:str, zip_code:str|None)->str|None:
-    # Demo: simple pattern rules — replace with a real dataset/API later.
     a = normalize(address)
     rules = {"davis dr": "Wednesday", "davis drive": "Wednesday",
              "morrisville parkway": "Thursday", "chapel hill rd": "Thursday",
@@ -549,12 +533,11 @@ with st.sidebar:
         st.success(f"Adapted to {selected_city}, North Carolina")
 
     st.divider()
-    # Address Helper (autocomplete + geocode)
+    # Address Helper
     st.markdown("**Address Helper** (optional)")
     provider = st.selectbox("Provider", ["Census (free)", "OpenStreetMap (Nominatim)", "Google (Geocoding)"], index=0)
     st.session_state.addr_provider = provider
 
-    # Autocomplete (Google) / multi-suggest (OSM)
     st.session_state.addr_query = st.text_input("Search or paste an address", value=st.session_state.addr_query)
     if st.button("Find address"):
         q = st.session_state.addr_query.strip()
@@ -564,13 +547,9 @@ with st.sidebar:
         else:
             if provider == "Google (Geocoding)":
                 if GOOGLE_KEY:
-                    # Use Places Autocomplete for suggestions
-                    suggestions = autocomplete_google(q)
-                    if not suggestions:
-                        st.session_state.addr_results = []
+                    st.session_state.addr_results = autocomplete_google(q)
+                    if not st.session_state.addr_results:
                         st.warning("No suggestions from Google Autocomplete.")
-                    else:
-                        st.session_state.addr_results = suggestions
                 else:
                     st.warning("Set GOOGLE_MAPS_API_KEY to use Google suggestions.")
             elif provider == "OpenStreetMap (Nominatim)":
@@ -583,16 +562,14 @@ with st.sidebar:
                 except Exception as e:
                     st.warning(f"Nominatim error: {e}")
             else:
-                # Census doesn't really do autocomplete; just try a direct match for convenience
                 geo = geocode_census(q, meta.get("city"), "North Carolina")
                 st.session_state.addr_results = [geo["matched"]] if geo else []
 
     if st.session_state.addr_results:
         choice = st.radio("Pick one", options=st.session_state.addr_results, index=0)
         if st.button("Use this address"):
-            # Push into the convo as the next answer
             push_user_and_process(choice)
-            st.experimental_rerun()
+            st.rerun()  # <-- FIX: modern rerun
 
     # Recent tickets
     if st.session_state.ticket_log:
@@ -623,7 +600,7 @@ with st.sidebar:
         st.session_state.active_intent = None
         st.session_state.pending_fields = []
         st.session_state.filled_fields = {}
-        st.experimental_rerun()
+        st.rerun()  # <-- FIX: modern rerun
 
 # ==============================
 # Main
