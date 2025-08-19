@@ -630,3 +630,8 @@ if st.session_state.ticket_log:
         row = r.copy(); row["payload"] = json.dumps(row["payload"], ensure_ascii=False)
         writer.writerow(row)
     st.download_button("⬇️ Download tickets.csv", out.getvalue(), "tickets.csv", "text/csv")
+
+ 
+
+
+ 
